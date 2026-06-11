@@ -3,9 +3,9 @@ import { Effect } from "effect"
 import { AbsolutePath } from "../schema"
 import { FSUtil } from "../fs-util"
 import { Git } from "../git"
-import { DirectoryUnavailableError, type Copy, type Strategy, type StrategyID } from "./copy"
+import { DirectoryUnavailableError, StrategyID, type Copy, type Strategy } from "./copy"
 
-export function makeStrategies(input: {
+export function makeGitWorktreeStrategy(input: {
   git: Git.Interface
   fs: FSUtil.Interface
   canonical: (directory: AbsolutePath) => Effect.Effect<AbsolutePath, DirectoryUnavailableError>
@@ -13,8 +13,8 @@ export function makeStrategies(input: {
   const repo = (sourceDirectory: AbsolutePath) =>
     ({ directory: sourceDirectory, store: sourceDirectory }) satisfies Git.Repo
 
-  const gitWorktree: Strategy = {
-    id: "git_worktree",
+  return {
+    id: StrategyID.make("git_worktree"),
     create: Effect.fn("ProjectCopy.GitWorktree.create")(function* (options) {
       yield* input.git.worktreeCreate({ repo: repo(options.sourceDirectory), directory: options.directory })
       return { directory: yield* input.canonical(options.directory) }
@@ -41,7 +41,5 @@ export function makeStrategies(input: {
     detect: Effect.fn("ProjectCopy.GitWorktree.detect")(function* (inputDirectory) {
       return yield* input.fs.isFile(path.join(inputDirectory, ".git"))
     }),
-  }
-
-  return new Map<StrategyID, Strategy>([[gitWorktree.id, gitWorktree]])
+  } satisfies Strategy
 }

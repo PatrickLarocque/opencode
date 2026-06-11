@@ -16,14 +16,16 @@ import { useCommandShortcut } from "../keymap"
 import { useProject } from "../context/project"
 import { Spinner } from "./spinner"
 import { DialogWorkspaceFileChanges } from "./dialog-workspace-file-changes"
+import type { ProjectDirectories } from "@opencode-ai/sdk/v2"
 
 export type MoveSessionSelection = { type: "directory"; directory: string; subdirectory: boolean } | { type: "new" }
+type ProjectDirectory = ProjectDirectories[number]
 
 export function DialogMoveSession(props: {
   projectID: string
   current?: MoveSessionSelection
   onSelect: (selection: MoveSessionSelection) => void
-  initialDirectories?: string[]
+  initialDirectories?: ProjectDirectory[]
   initialRemoving?: string
 }) {
   const dialog = useDialog()
@@ -52,8 +54,8 @@ export function DialogMoveSession(props: {
       return result.data?.id === projectID ? result.data.worktree : undefined
     },
   )
-  const project = createMemo(() =>
-    projectContext.project() === props.projectID ? projectContext.data.project.worktree : loadedProject(),
+  const currentCheckout = createMemo(() =>
+    projectContext.project() === props.projectID ? projectContext.instance.path().worktree : loadedProject(),
   )
 
   const [directories, { refetch }] = createResource(
@@ -61,9 +63,12 @@ export function DialogMoveSession(props: {
     async (projectID) => {
       setWorking(true)
       try {
-        await sdk.client.experimental.projectCopy.refresh({ projectID }, { throwOnError: true })
+        await sdk.client.v2.projectCopy.refresh(
+          { projectID, location: { directory: sdk.directory } },
+          { throwOnError: true },
+        )
         const directories = await sdk.client.project.directories({ projectID }, { throwOnError: true })
-        return directories.data?.map((item) => item.directory) ?? []
+        return directories.data ?? []
       } finally {
         setWorking(false)
       }
@@ -73,37 +78,50 @@ export function DialogMoveSession(props: {
 
   const options = createMemo<DialogSelectOption<MoveSessionSelection | undefined>[]>(() => {
     const data = directories()
-    const main = project()
-    if (directories.loading && !data && !main) return [{ title: "Loading project directories...", value: undefined }]
-    if (directories.error && !data && !main) return [{ title: "Failed to load project directories", value: undefined }]
-    const roots = [...new Set(main ? [main, ...(data ?? [])] : (data ?? []))]
+    const current = currentCheckout()
+    if (directories.loading && !data && !current) return [{ title: "Loading project directories...", value: undefined }]
+    if (directories.error && !data && !current) return [{ title: "Failed to load project directories", value: undefined }]
+    const roots = Array.from(
+      new Map(
+        [...(current ? [{ directory: current } satisfies ProjectDirectory] : []), ...(data ?? [])].map((item) => [
+          item.directory,
+          item,
+        ]),
+      ).values(),
+    ).toSorted((a, b) => {
+      if (a.directory === current) return -1
+      if (b.directory === current) return 1
+      if (Boolean(a.strategy) !== Boolean(b.strategy)) return a.strategy ? 1 : -1
+      return 0
+    })
     if (roots.length === 0) return [{ title: "No project directories found", value: undefined }]
     const subdirectories = sync.data.session
       .filter((session) => session.projectID === props.projectID && session.path && ![".", "/"].includes(session.path))
       .map((session) => session.directory)
-      .filter((directory) => !roots.includes(directory))
+      .filter((directory) => !roots.some((root) => root.directory === directory))
       .filter((directory, index, directories) => directories.indexOf(directory) === index)
       .map((location) => ({
         location,
         root: roots
           .filter((root) => {
-            const relative = path.relative(root, location)
+            const relative = path.relative(root.directory, location)
             return relative && relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative)
           })
-          .toSorted((a, b) => b.length - a.length)[0],
+          .toSorted((a, b) => b.directory.length - a.directory.length)[0],
       }))
-      .filter((item): item is { location: string; root: string } => item.root !== undefined)
-    const list = [...roots.map((location) => ({ location, root: location })), ...subdirectories].toSorted((a, b) => {
+      .filter((item): item is { location: string; root: ProjectDirectory } => item.root !== undefined)
+    const list = [...roots.map((root) => ({ location: root.directory, root })), ...subdirectories].toSorted((a, b) => {
       const root = roots.indexOf(a.root) - roots.indexOf(b.root)
       if (root !== 0) return root
-      if (a.location === a.root) return -1
-      if (b.location === b.root) return 1
+      if (a.location === a.root.directory) return -1
+      if (b.location === b.root.directory) return 1
       return a.location.localeCompare(b.location)
     })
     const titleWidth = Math.max(1, Math.min(116, dimensions().width - 2) - 12)
     return list.map((item) => {
       const title = abbreviateHome(item.location, paths.home)
-      const suffix = item.location === item.root ? undefined : path.sep + path.relative(item.root, item.location)
+      const suffix =
+        item.location === item.root.directory ? undefined : path.sep + path.relative(item.root.directory, item.location)
       const visible = Locale.truncateLeft(title, titleWidth)
       const split = suffix ? Math.max(0, visible.length - suffix.length) : visible.length
       const deleting = toDelete() === item.location
@@ -119,8 +137,17 @@ export function DialogMoveSession(props: {
           </>
         ) : undefined,
         bg: deleting ? theme.error : undefined,
-        value: { type: "directory", directory: item.location, subdirectory: item.location !== item.root } as const,
-        category: item.root === main ? "Project" : "Working copies",
+        value: {
+          type: "directory",
+          directory: item.location,
+          subdirectory: item.location !== item.root.directory,
+        } as const,
+        category:
+          item.root.directory === current
+            ? "Current checkout"
+            : item.root.strategy
+              ? "Working copies"
+              : "Other checkouts",
         titleWidth,
         truncateTitle: "left" as const,
       }
@@ -137,23 +164,29 @@ export function DialogMoveSession(props: {
   async function remove(option: DialogSelectOption<MoveSessionSelection | undefined>) {
     if (!option.value || option.value.type !== "directory" || option.value.subdirectory || removing()) return
     const data = directories()
-    const main = project()
-    if (!data || !main || option.value.directory === main || !data.includes(option.value.directory)) return
-    if (toDelete() !== option.value.directory) {
-      setToDelete(option.value.directory)
+    const selected = option.value
+    const root = data?.find((item) => item.directory === selected.directory)
+    if (!root?.strategy || selected.directory === currentCheckout()) return
+    if (toDelete() !== selected.directory) {
+      setToDelete(selected.directory)
       return
     }
     setToDelete(undefined)
-    setRemoving(option.value.directory)
+    setRemoving(selected.directory)
     setWorking(true)
-    const result = await sdk.client.experimental.projectCopy
-      .remove({ projectID: props.projectID, directory: option.value.directory, force: false })
+    const result = await sdk.client.v2.projectCopy
+      .remove({
+        projectID: props.projectID,
+        location: { directory: sdk.directory },
+        directory: selected.directory,
+        force: false,
+      })
       .catch((error) => ({ error }))
     if (result.error) {
       setRemoving(undefined)
       setWorking(false)
       if ("data" in result.error && result.error.data.forceRequired) {
-        const status = await sdk.client.vcs.status({ directory: option.value.directory }).catch(() => undefined)
+        const status = await sdk.client.vcs.status({ directory: selected.directory }).catch(() => undefined)
         const choice = await DialogWorkspaceFileChanges.show(dialog, status?.data ?? [], {
           title: "Delete working copy?",
           message: "This working copy has file changes. Do you want to delete it anyway?",
@@ -162,9 +195,14 @@ export function DialogMoveSession(props: {
           reopen()
           return
         }
-        reopen(option.value.directory)
-        const forced = await sdk.client.experimental.projectCopy
-          .remove({ projectID: props.projectID, directory: option.value.directory, force: true })
+        reopen(selected.directory)
+        const forced = await sdk.client.v2.projectCopy
+          .remove({
+            projectID: props.projectID,
+            location: { directory: sdk.directory },
+            directory: selected.directory,
+            force: true,
+          })
           .catch((error) => ({ error }))
         if (forced.error) {
           toast.show({
@@ -219,11 +257,12 @@ export function DialogMoveSession(props: {
           {
             command: "dialog.move_session.delete",
             title: "delete",
-            disabled: (option) =>
-              !option?.value ||
-              option.value.type !== "directory" ||
-              option.value.subdirectory ||
-              option.value.directory === project(),
+            disabled: (option) => {
+              const value = option?.value
+              if (!value || value.type !== "directory" || value.subdirectory) return true
+              if (value.directory === currentCheckout()) return true
+              return !directories()?.find((item) => item.directory === value.directory)?.strategy
+            },
             onTrigger: remove,
           },
           {

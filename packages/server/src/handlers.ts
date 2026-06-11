@@ -20,6 +20,7 @@ import { ReferenceHandler } from "./handlers/reference"
 import * as SessionExecutionLocal from "@opencode-ai/core/session/execution/local"
 import { LocationHandler } from "./handlers/location"
 import { ConnectorHandler } from "./handlers/connector"
+import { ProjectCopyHandler } from "./handlers/project-copy"
 
 export const handlers = Layer.mergeAll(
   HealthHandler,
@@ -37,6 +38,7 @@ export const handlers = Layer.mergeAll(
   EventHandler,
   QuestionHandler,
   ReferenceHandler,
+  ProjectCopyHandler,
 ).pipe(
   Layer.provide(sessionLocationLayer),
   Layer.provide(locationLayer),

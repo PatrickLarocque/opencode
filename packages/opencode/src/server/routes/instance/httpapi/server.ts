@@ -28,7 +28,6 @@ import { InstanceLayer } from "@/project/instance-layer"
 import { Plugin } from "@/plugin"
 import { Project } from "@/project/project"
 import { ProjectV2 } from "@opencode-ai/core/project"
-import { ProjectCopy } from "@opencode-ai/core/project/copy"
 import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
 import { ProviderAuth } from "@/provider/auth"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
@@ -228,7 +227,6 @@ export function createRoutes(
       Plugin.defaultLayer,
       Project.defaultLayer,
       ProjectV2.defaultLayer,
-      ProjectCopy.defaultLayer,
       MoveSession.defaultLayer,
       ProviderAuth.defaultLayer,
       Provider.defaultLayer,

@@ -23,11 +23,12 @@ import { Project } from "../src/project"
 import { Reference } from "../src/reference"
 import { ToolRegistry } from "../src/tool/registry"
 import { ApplicationTools } from "../src/tool/application-tools"
+import { ProjectCopy } from "../src/project/copy"
 
 const applicationTools = ApplicationTools.layer
 const it = testEffect(
   Layer.merge(
-    applicationTools,
+    Layer.mergeAll(applicationTools, Database.defaultLayer, EventV2.defaultLayer),
     LocationServiceMap.layer.pipe(
       Layer.provide(applicationTools),
       Layer.provide(
@@ -137,4 +138,37 @@ describe("LocationServiceMap", () => {
       ),
     ),
   )
+
+  it.live("isolates project copy strategies by location", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
+      (dirs) => Effect.promise(() => Promise.all(dirs.map((dir) => dir[Symbol.asyncDispose]())).then(() => undefined)),
+    ).pipe(
+      Effect.flatMap(([first, second]) =>
+        Effect.gen(function* () {
+          const locations = yield* LocationServiceMap
+          const custom = ProjectCopy.StrategyID.make("test/custom")
+          const ref = (directory: string) => Location.Ref.make({ directory: AbsolutePath.make(directory) })
+          const register = ProjectCopy.Service.use((copy) =>
+            copy.register({
+              id: custom,
+              detect: () => Effect.succeed(true),
+              create: () => Effect.die("unused"),
+              remove: () => Effect.die("unused"),
+              list: () => Effect.succeed([]),
+            }),
+          )
+          const detected = ProjectCopy.Service.use((copy) =>
+            copy.detect({ directory: AbsolutePath.make(first.path) }),
+          )
+
+          yield* register.pipe(Effect.scoped, Effect.provide(locations.get(ref(first.path))))
+
+          expect(yield* detected.pipe(Effect.scoped, Effect.provide(locations.get(ref(first.path))))).toBe(custom)
+          expect(yield* detected.pipe(Effect.scoped, Effect.provide(locations.get(ref(second.path))))).toBeUndefined()
+        }),
+      ),
+    ),
+  )
+
 })

@@ -64,6 +64,15 @@ describe("v2 location HttpApi", () => {
     }
   })
 
+  test("decodes SDK directory headers", async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    const response = await request("/api/location", encodeURIComponent(tmp.path))
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ directory: tmp.path, project: { directory: tmp.path } })
+  })
+
   test("streams native EventV2 payloads with resolved locations", async () => {
     await using tmp = await tmpdir({ git: true })
     const response = await request("/api/event", tmp.path)

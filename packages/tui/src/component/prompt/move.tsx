@@ -31,12 +31,17 @@ export function usePromptMove(input: { projectID: () => string | undefined; sess
     setCreating(true)
     setProgress("Creating copy")
     try {
-      const result = await sdk.client.experimental.projectCopy.create(
+      const generated = await sdk.client.experimental.projectCopy.generateName(
+        { projectID, context },
+        { throwOnError: true },
+      )
+      const result = await sdk.client.v2.projectCopy.create(
         {
           projectID,
+          location: { directory: sdk.directory },
           strategy: "git_worktree",
           directory: path.join(paths.worktree, projectID.slice(0, 6)),
-          context,
+          name: generated.data.name,
         },
         { throwOnError: true },
       )
